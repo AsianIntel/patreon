@@ -28,6 +28,7 @@ impl Client {
         discord_id: u64,
     ) -> Result<(Option<String>, Option<String>), PatreonError> {
         let mut link = Some("https://www.patreon.com/api/oauth2/v2/campaigns/3229705/members?include=currently_entitled_tiers,user&fields%5Buser%5D=social_connections".to_string());
+        let mut patreon_id: Option<String> = None;
         while link.is_some() {
             let res: Value = self
                 .client
@@ -43,10 +44,10 @@ impl Client {
                     let disc = &user["attributes"]["social_connections"]["discord"]["user_id"];
                     if let Some(Ok(disc)) = disc.as_str().map::<Result<u64, _>, _>(str::parse) {
                         if disc == discord_id {
-                            let patreon_id = user["id"].as_str().unwrap();
+                            patreon_id = Some(user["id"].as_str().unwrap().to_string());
                             for u in users {
                                 if u["relationships"]["user"]["data"]["id"].as_str().unwrap()
-                                    == patreon_id
+                                    == patreon_id.as_ref().unwrap()
                                 {
                                     let tiers = u["relationships"]["currently_entitled_tiers"]
                                         ["data"]
@@ -54,11 +55,10 @@ impl Client {
                                         .unwrap();
                                     if !tiers.is_empty() {
                                         return Ok((
-                                            Some(patreon_id.to_string()),
+                                            patreon_id,
                                             tiers[0]["id"].as_str().map(ToOwned::to_owned),
                                         ));
                                     }
-                                    return Ok((Some(patreon_id.to_string()), None));
                                 }
                             }
                         }
@@ -67,6 +67,6 @@ impl Client {
             }
             link = res["links"]["next"].as_str().map(ToOwned::to_owned);
         }
-        Ok((None, None))
+        Ok((patreon_id, None))
     }
 }
