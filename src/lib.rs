@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::borrow::ToOwned;
 
-use error::PatreonError;
+pub use error::PatreonError;
 
 #[derive(Clone)]
 pub struct Client {
