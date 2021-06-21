@@ -1,26 +1,67 @@
-use reqwest::{header, Client as ReqwestClient, Error};
+mod error;
+
+use hyper::{
+    body::{self, Buf},
+    client::HttpConnector,
+    header::{HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE},
+    Body, Client as HyperClient, Method, Request,
+};
+use hyper_rustls::HttpsConnector;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::borrow::ToOwned;
 
-pub type PatreonError = Error;
+use error::PatreonError;
 
 #[derive(Clone)]
 pub struct Client {
-    client: ReqwestClient,
+    client: HyperClient<HttpsConnector<HttpConnector>>,
+    patreon_key: String,
 }
 
 impl Client {
     pub fn new(patreon_key: &str) -> Self {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(patreon_key).unwrap(),
+        let connector = hyper_rustls::HttpsConnector::with_webpki_roots();
+        let client = HyperClient::builder().build(connector);
+        Self {
+            client,
+            patreon_key: patreon_key.to_string(),
+        }
+    }
+
+    pub async fn request<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        method: Method,
+        body: Option<Vec<u8>>,
+    ) -> Result<T, PatreonError> {
+        let builder = Request::builder().uri(url).method(method).header(
+            AUTHORIZATION,
+            HeaderValue::from_str(&self.patreon_key).unwrap(),
         );
-        let client = ReqwestClient::builder()
-            .default_headers(headers)
-            .build()
-            .unwrap();
-        Self { client }
+        let req = if let Some(bytes) = body {
+            let len = bytes.len();
+            builder
+                .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+                .header(CONTENT_LENGTH, len)
+                .body(Body::from(bytes))?
+        } else {
+            builder.body(Body::empty())?
+        };
+
+        let res = self.client.request(req).await?;
+
+        let status = res.status();
+        if !status.is_success() {
+            return Err(PatreonError::APIError(status));
+        }
+
+        let mut buf = body::aggregate(res.into_body()).await?;
+        let mut bytes = vec![0; buf.remaining()];
+        buf.copy_to_slice(&mut bytes);
+
+        let result = serde_json::from_slice(&bytes)?;
+        Ok(result)
     }
 
     pub async fn get_patron(
@@ -30,12 +71,8 @@ impl Client {
         let mut link = Some("https://www.patreon.com/api/oauth2/v2/campaigns/3229705/members?include=currently_entitled_tiers,user&fields%5Buser%5D=social_connections".to_string());
         let mut patreon_id: Option<String> = None;
         while link.is_some() {
-            let res: Value = self
-                .client
-                .get(&link.unwrap())
-                .send()
-                .await?
-                .json::<Value>()
+            let res = self
+                .request::<Value>(&link.unwrap(), Method::GET, None)
                 .await?;
             let info = res["included"].as_array().unwrap();
             let users = res["data"].as_array().unwrap();
